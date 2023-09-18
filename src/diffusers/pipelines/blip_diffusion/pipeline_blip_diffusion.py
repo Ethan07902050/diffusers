@@ -274,7 +274,7 @@ class BlipDiffusionPipeline(DiffusionPipeline):
             prompt_reps=prompt_reps,
         )
         
-        if reference_image is not None
+        if reference_image is not None:
             query_embeds = self.get_query_embeddings(reference_image, source_subject_category)
             text_embeddings = self.encode_prompt(query_embeds, prompt, ctx_begin_pos)
         else:
