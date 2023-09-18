@@ -129,10 +129,9 @@ class BlipDiffusionPipeline(DiffusionPipeline):
         return self.qformer(image_input=input_image, text_input=src_subject, return_dict=False)
 
     # from the original Blip Diffusion code, speciefies the target subject and augments the prompt by repeating it
-    def _build_prompt(self, prompts, tgt_subjects, prompt_strength=1.0, prompt_reps=20):
+    def _build_prompt(self, prompts, prompt_strength=1.0, prompt_reps=20):
         rv = []
-        for prompt, tgt_subject in zip(prompts, tgt_subjects):
-            prompt = f"a {tgt_subject} {prompt.strip()}"
+        for prompt in prompts:
             # a trick to amplify the prompt
             rv.append(", ".join([prompt] * int(prompt_strength * prompt_reps)))
 
@@ -156,7 +155,7 @@ class BlipDiffusionPipeline(DiffusionPipeline):
         latents = latents * self.scheduler.init_noise_sigma
         return latents
 
-    def encode_prompt(self, query_embeds, prompt):
+    def encode_prompt(self, query_embeds, prompt, ctx_begin_pos):
         # embeddings for prompt, with query_embeds as context
         max_len = self.text_encoder.text_model.config.max_position_embeddings
         max_len -= self.qformer.config.num_query_tokens
@@ -169,8 +168,8 @@ class BlipDiffusionPipeline(DiffusionPipeline):
             return_tensors="pt",
         ).to(self.device)
 
-        batch_size = query_embeds.shape[0]
-        ctx_begin_pos = [self.config.ctx_begin_pos] * batch_size
+        # batch_size = query_embeds.shape[0]
+        # ctx_begin_pos = [self.config.ctx_begin_pos] * batch_size
 
         text_embeddings = self.text_encoder(
             input_ids=tokenized_prompt.input_ids,
@@ -185,9 +184,10 @@ class BlipDiffusionPipeline(DiffusionPipeline):
     def __call__(
         self,
         prompt: List[str],
-        reference_image: PIL.Image.Image,
-        source_subject_category: List[str],
-        target_subject_category: List[str],
+        reference_image: PIL.Image.Image = None,
+        ctx_begin_pos: List[int] = None,
+        source_subject_category: List[str] = None,
+        target_subject_category: List[str] = None,
         latents: Optional[torch.FloatTensor] = None,
         guidance_scale: float = 7.5,
         height: int = 512,
@@ -251,10 +251,11 @@ class BlipDiffusionPipeline(DiffusionPipeline):
             [`~pipelines.ImagePipelineOutput`] or `tuple`
         """
 
-        reference_image = self.image_processor.preprocess(
-            reference_image, image_mean=self.config.mean, image_std=self.config.std, return_tensors="pt"
-        )["pixel_values"]
-        reference_image = reference_image.to(self.device)
+        if reference_image is not None:
+            reference_image = self.image_processor.preprocess(
+                reference_image, image_mean=self.config.mean, image_std=self.config.std, return_tensors="pt"
+            )["pixel_values"]
+            reference_image = reference_image.to(self.device)
 
         if isinstance(prompt, str):
             prompt = [prompt]
@@ -262,17 +263,34 @@ class BlipDiffusionPipeline(DiffusionPipeline):
             source_subject_category = [source_subject_category]
         if isinstance(target_subject_category, str):
             target_subject_category = [target_subject_category]
+        if isinstance(ctx_begin_pos, int):
+            ctx_begin_pos = [ctx_begin_pos]
 
         batch_size = len(prompt)
 
         prompt = self._build_prompt(
             prompts=prompt,
-            tgt_subjects=target_subject_category,
             prompt_strength=prompt_strength,
             prompt_reps=prompt_reps,
         )
-        query_embeds = self.get_query_embeddings(reference_image, source_subject_category)
-        text_embeddings = self.encode_prompt(query_embeds, prompt)
+        
+        if reference_image is not None
+            query_embeds = self.get_query_embeddings(reference_image, source_subject_category)
+            text_embeddings = self.encode_prompt(query_embeds, prompt, ctx_begin_pos)
+        else:
+            max_length = self.text_encoder.text_model.config.max_position_embeddings
+            tokenized_prompt = self.tokenizer(
+                prompt,
+                padding="max_length",
+                truncation=True,
+                max_length=max_length,
+                return_tensors="pt",
+            ).to(self.device)
+            text_embeddings = self.text_encoder(
+                input_ids=tokenized_prompt.input_ids,
+                ctx_embeddings=None,
+            )[0]
+
         do_classifier_free_guidance = guidance_scale > 1.0
         if do_classifier_free_guidance:
             max_length = self.text_encoder.text_model.config.max_position_embeddings
